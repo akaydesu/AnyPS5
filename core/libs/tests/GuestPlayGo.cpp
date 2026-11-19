@@ -580,7 +580,8 @@ int main(int argc, char** argv) {
         if (mode == "--ficm-only") return CheckRejectedLayout(argv[2], "playgo-ficm.dat");
         if (mode == "--hash-table-only") return CheckRejectedLayout(argv[2], "playgo-hash-table.dat");
         if (mode == "--invalid-chunk-table") return CheckRejectedLayout(argv[2], "playgo-chunk.dat");
-        if (mode == "--chunkdefs-range" || mode == "--chunkdefs-overflow") return CheckChunkdefsRejected(argv[2]);
+        if (mode == "--chunkdefs") return CheckPackageChunkTable(argv[2]);
+        if (mode == "--chunkdefs-invalid") return CheckChunkdefsRejected(argv[2]);
     }
     RunLayout(argv[0], "--no-file", {});
     RunLayout(argv[0], "--no-file-installed", {});
@@ -626,7 +627,11 @@ int main(int argc, char** argv) {
     RunLayout(argv[0], "--hash-table-only", {{"playgo-hash-table.dat", "x"}});
     RunLayout(argv[0], "--invalid-chunk-table", {{"playgo-chunk.dat", "not a chunk table"}});
     RunLayout(argv[0], "--invalid-chunk-table", {{"playgo-chunk.dat", ChunkTableFile("plgo", 0)}});
-    RunLayout(argv[0], "--chunkdefs-range", {{"playgo-chunkdefs.xml", "<chunkdefs><chunk id=\"65537\"/></chunkdefs>"}});
-    RunLayout(argv[0], "--chunkdefs-overflow", {{"playgo-chunkdefs.xml", "<chunkdefs><chunk id=\"4294967296\"/></chunkdefs>"}});
+    RunLayout(argv[0], "--chunkdefs", {{"playgo-chunkdefs.xml",
+        R"(<chunkdefs default_chunk = '1'><!-- <chunk id="3"/> --><group><chunk label="part" id = '&#50;'/></group></chunkdefs>)"}});
+    RunLayout(argv[0], "--chunkdefs-invalid", {{"playgo-chunkdefs.xml", "<chunkdefs><chunk id='2'/></bad>"}});
+    RunLayout(argv[0], "--chunkdefs-invalid", {{"playgo-chunkdefs.xml", "<chunkdefs default_chunk='1x'/>"}});
+    RunLayout(argv[0], "--chunkdefs-invalid", {{"playgo-chunkdefs.xml", "<chunkdefs><chunk id=\"65537\"/></chunkdefs>"}});
+    RunLayout(argv[0], "--chunkdefs-invalid", {{"playgo-chunkdefs.xml", "<chunkdefs><chunk id=\"4294967296\"/></chunkdefs>"}});
     return 0;
 }

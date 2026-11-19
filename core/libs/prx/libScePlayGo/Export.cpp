@@ -10,8 +10,10 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <iterator>
-#include <regex>
+#include <libxml/parser.h>
+#include <memory>
+#include <optional>
+#include <string_view>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -107,11 +109,33 @@ struct ErrnoGuard {
     ~ErrnoGuard() { errno = saved; }
 };
 
+static std::optional<uint16_t> ChunkAttribute(xmlNode* node, const char* name) {
+    std::unique_ptr<xmlChar, decltype(xmlFree)> value(xmlGetNoNsProp(node, BAD_CAST name), xmlFree);
+    if (!value) return std::nullopt;
+    const std::string_view token(reinterpret_cast<const char*>(value.get()));
+    uint16_t id = 0;
+    const auto result = std::from_chars(token.data(), token.data() + token.size(), id);
+    if (result.ec != std::errc{} || result.ptr != token.data() + token.size())
+        throw std::runtime_error(std::string("scePlayGo: playgo-chunkdefs.xml ") + name + " is not a chunk id from 0 to 65535");
+    return id;
+}
+
+static void ReadChunkElements(xmlNode* node, ChunkTable& table, std::optional<uint16_t>& defaultChunk) {
+    for (; node; node = node->next) {
+        if (node->type != XML_ELEMENT_NODE) continue;
+        if (!defaultChunk) defaultChunk = ChunkAttribute(node, "default_chunk");
+        if (xmlStrEqual(node->name, BAD_CAST "chunk")) {
+            if (auto id = ChunkAttribute(node, "id")) table.ids.insert(*id);
+        }
+        ReadChunkElements(node->children, table, defaultChunk);
+    }
+}
+
 static const ChunkTable& Chunks() {
     static const ChunkTable chunks = [] {
         const ErrnoGuard errnoGuard;
         ChunkTable table;
-        std::ifstream file(ResolvePath_nid_no_patch("/app0/playgo-chunkdefs.xml"));
+        std::ifstream file(ResolvePath_nid_no_patch("/app0/playgo-chunkdefs.xml"), std::ios::binary);
         if (!file) {
             if (ReadPackageChunks(table)) return table;
             table.scenario = std::ifstream(ResolvePath_nid_no_patch("/app0/sce_sys/playgo-scenario.json")).good();
@@ -124,26 +148,18 @@ static const ChunkTable& Chunks() {
             return table;
         }
         table.defined = true;
-        auto& result = table.ids;
-        const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-        static const std::regex chunk(R"re(<chunk\s+id="(\d+)")re");
-        for (auto it = std::sregex_iterator(text.begin(), text.end(), chunk); it != std::sregex_iterator(); ++it) {
-            const auto token = (*it)[1].str();
-            std::uint32_t parsed = 0;
-            const auto parse = std::from_chars(token.data(), token.data() + token.size(), parsed);
-            if (parse.ec != std::errc{} || parsed > 0xFFFF)
-                throw std::runtime_error("scePlayGo: playgo-chunkdefs.xml chunk id " + token + " is not a chunk id from 0 to 65535");
-            result.insert(static_cast<uint16_t>(parsed));
-        }
-        static const std::regex defaultChunk(R"re(default_chunk="(\d+)")re");
-        std::smatch match;
-        if (std::regex_search(text, match, defaultChunk)) {
-            const auto token = match[1].str();
-            std::uint32_t last = 0;
-            const auto parse = std::from_chars(token.data(), token.data() + token.size(), last);
-            if (parse.ec != std::errc{} || last > 0xFFFF)
-                throw std::runtime_error("scePlayGo: playgo-chunkdefs.xml default_chunk " + token + " is not a chunk id from 0 to 65535");
-            for (std::uint32_t id = 0; id <= last; ++id) result.insert(static_cast<uint16_t>(id));
+        const auto read = [](void* context, char* buffer, int size) {
+            auto& input = *static_cast<std::ifstream*>(context);
+            input.read(buffer, size);
+            return input.bad() ? -1 : static_cast<int>(input.gcount());
+        };
+        std::unique_ptr<xmlDoc, decltype(&xmlFreeDoc)> document(
+            xmlReadIO(read, nullptr, &file, nullptr, nullptr, XML_PARSE_NONET | XML_PARSE_NOERROR | XML_PARSE_NOWARNING), xmlFreeDoc);
+        if (!document) throw std::runtime_error("scePlayGo: could not parse playgo-chunkdefs.xml");
+        std::optional<uint16_t> defaultChunk;
+        ReadChunkElements(xmlDocGetRootElement(document.get()), table, defaultChunk);
+        if (defaultChunk) {
+            for (uint32_t id = 0; id <= *defaultChunk; ++id) table.ids.insert(static_cast<uint16_t>(id));
         }
         return table;
     }();
